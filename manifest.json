@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Toolie - Your Retool Assistant",
+  "version": "1.0.0",
+  "description": "Toolie brings helpful (and sarcastic) commentary to your Retool Assist experience",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.retool.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.retool.com/*"],
+      "js": ["content.js"],
+      "css": ["toolie.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["toolie.svg"],
+      "matches": ["https://*.retool.com/*"]
+    }
+  ],
+  "icons": {
+    "16": "toolie.svg",
+    "48": "toolie.svg",
+    "128": "toolie.svg"
+  }
+}
