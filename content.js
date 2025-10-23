@@ -135,9 +135,19 @@ class ToolieAssistant {
       ]
     };
     this.lastMessages = {}; // Track last message for each context
+
+    // AI summary tracking
+    this.buildingMessageCount = 0;
+    this.hasPromptAPI = false;
+    this.useAISummaries = false;
+    this.lastSummaryTime = 0;
+    this.aiSession = null;
+    this.isCreatingSession = false;
   }
 
-  init() {
+  async init() {
+    // Check for Chrome AI availability
+    await this.checkChromeAI();
     // Check if we're on a Retool page
     if (!window.location.hostname.includes('retool.com')) {
       return;
@@ -148,6 +158,126 @@ class ToolieAssistant {
       document.addEventListener('DOMContentLoaded', () => this.setup());
     } else {
       this.setup();
+    }
+  }
+
+  async checkChromeAI() {
+    console.log('🚀 Toolie: Checking for Chrome AI capabilities...');
+    console.log('🔍 Toolie: LanguageModel API exists?', 'LanguageModel' in self);
+
+    try {
+      // Check for Prompt API (LanguageModel) (Chrome 138+)
+      if ('LanguageModel' in self) {
+        console.log('🔍 Toolie: LanguageModel API exists, checking availability...');
+
+        // Check availability with output language specified
+        const availability = await self.LanguageModel.availability({
+          expectedInputs: [{ type: "text", languages: ["en"] }],
+          expectedOutputs: [{ type: "text", languages: ["en"] }]
+        });
+        console.log('🔍 Toolie: LanguageModel API availability:', availability);
+
+        if (availability === 'readily' || availability === 'available') {
+          this.hasPromptAPI = true;
+          this.useAISummaries = true;
+          console.log('✅ Toolie: Prompt API available!');
+
+          // Try to create session immediately (model already downloaded)
+          // If this fails due to user gesture, it will be created on first keystroke
+          const sessionCreated = await this.createAISession();
+          if (sessionCreated) {
+            console.log('✅ Toolie: AI summaries enabled! 🎉');
+          } else {
+            console.log('✅ Toolie: AI summaries will be enabled on first user interaction');
+          }
+        } else if (availability === 'after-download' || availability === 'downloadable') {
+          console.log('⚠️ Toolie: Language model needs to be downloaded');
+          console.log('💡 Toolie: Will download model on first use (requires user interaction)');
+
+          // Mark as available but session will be created on first use (which happens after user types)
+          this.hasPromptAPI = true;
+          this.useAISummaries = true;
+          console.log('✅ Toolie: Prompt API ready (download pending)');
+        } else {
+          console.log('⚠️ Toolie: Prompt API not available:', availability);
+          this.useAISummaries = false;
+        }
+      } else {
+        console.log('❌ Toolie: Prompt API not found (requires Chrome 138+)');
+        this.useAISummaries = false;
+      }
+
+      console.log('📊 Toolie: Final AI status - hasPromptAPI:', this.hasPromptAPI, 'useAISummaries:', this.useAISummaries);
+
+      if (!this.useAISummaries) {
+        console.log('⚠️ Toolie: Chrome AI not available, using regular messages');
+      }
+    } catch (error) {
+      console.log('❌ Toolie: Error checking AI capabilities:', error.message, error);
+      this.useAISummaries = false;
+    }
+  }
+
+  async createAISession() {
+    try {
+      console.log('🎭 Toolie: Creating AI session with personality...');
+
+      const params = await self.LanguageModel.params();
+      console.log('🔧 Toolie: Model params:', params);
+
+      // Create session with Toolie's personality as system prompt
+      // Note: topK and temperature must both be specified or neither
+      const sessionConfig = {
+        expectedInputs: [{ type: "text", languages: ["en"] }],
+        expectedOutputs: [{ type: "text", languages: ["en"] }],
+        initialPrompts: [
+          {
+            role: 'system',
+            content: `You are Toolie, a slightly sarcastic but helpful mascot for Retool (a low-code platform).
+Your job is to observe what Retool Assist is building and summarize it in 1-2 sentences with personality.
+
+Tone guidelines:
+- Be friendly but a bit cheeky
+- Use casual language ("whipping up", "tossing in", "hooking up")
+- Occasionally make light observations ("fancy!", "getting serious now", "oooh data tables")
+- Keep it SHORT - max 2 sentences
+- Focus on WHAT is being built, not how
+- Be conversational, like you're a coworker watching over someone's shoulder
+
+Example responses:
+- "Whipping up a posts table with some mock data - 15-20 sample posts with all the usual suspects: IDs, dates, platforms, the works."
+- "Just configured a bunch of charts and KPIs to use filtered data. Getting fancy with those dashboards! 📊"
+- "Tossed in a query that grabs post data and filters it by date. Pretty standard stuff, but hey, it works!"
+- "Building out a full social media dashboard - tables, charts, KPIs, the whole shebang. Someone's ambitious today!"
+
+Remember: Short, sarcastic-but-nice, focused on the work being done.`
+          }
+        ],
+        monitor(m) {
+          m.addEventListener('downloadprogress', (e) => {
+            console.log(`📥 Toolie: Model download progress: ${Math.round(e.loaded * 100)}%`);
+          });
+        }
+      };
+
+      // Only add temperature and topK if they're valid
+      if (params.defaultTemperature && params.defaultTopK && params.maxTemperature) {
+        sessionConfig.temperature = Math.min(params.defaultTemperature * 1.2, params.maxTemperature);
+        sessionConfig.topK = params.defaultTopK;
+        console.log('🔧 Toolie: Using custom temperature:', sessionConfig.temperature, 'topK:', sessionConfig.topK);
+      } else {
+        console.log('🔧 Toolie: Using default temperature and topK');
+      }
+
+      this.aiSession = await self.LanguageModel.create(sessionConfig);
+
+      console.log('✅ Toolie: AI session created with personality!');
+      return true;
+    } catch (error) {
+      console.log('❌ Toolie: Failed to create AI session:', error.message);
+      this.useAISummaries = false;
+      this.aiSession = null;
+      return false;
     }
   }
 
@@ -287,6 +417,15 @@ class ToolieAssistant {
             clearTimeout(typingTimeout);
             keyPressCount++;
 
+            // Initialize AI session on first keystroke if needed (user gesture!)
+            if (keyPressCount === 1 && this.hasPromptAPI && !this.aiSession && !this.isCreatingSession) {
+              console.log('👆 Toolie: User gesture detected, initializing AI session...');
+              this.isCreatingSession = true;
+              this.createAISession().then(() => {
+                this.isCreatingSession = false;
+              });
+            }
+
             // Only trigger typing state after 3+ key presses
             if (keyPressCount >= 3 && this.lastActivityType !== 'typing') {
               this.setAnimation('typing');
@@ -375,17 +514,21 @@ class ToolieAssistant {
           } else if (textContent.includes('Planning')) {
             if (this.lastActivityType !== 'assist-planning') {
               this.setAnimation('thinking');
-              this.showMessage('building');
               this.lastActivityType = 'assist-planning';
+              this.buildingMessageCount = 0;
               console.log('Toolie: Assist is planning');
+              // Start periodic messages
+              this.startBuildingMessages();
             }
             return;
           } else if (textContent.includes('Building')) {
             if (this.lastActivityType !== 'assist-building') {
               this.setAnimation('excited');
-              this.showMessage('building');
               this.lastActivityType = 'assist-building';
+              this.buildingMessageCount = 0;
               console.log('Toolie: Assist is building');
+              // Start periodic messages
+              this.startBuildingMessages();
             }
             return;
           }
@@ -396,6 +539,7 @@ class ToolieAssistant {
       if (this.lastActivityType === 'assist-thinking' ||
           this.lastActivityType === 'assist-planning' ||
           this.lastActivityType === 'assist-building') {
+        this.stopBuildingMessages();
         this.setAnimation('excited');
         this.showMessage('success');
         this.lastActivityType = 'assist-complete';
@@ -410,6 +554,216 @@ class ToolieAssistant {
 
     // Check periodically for thinking state
     setInterval(checkThinkingState, 500);
+  }
+
+  startBuildingMessages() {
+    // Clear any existing interval
+    this.stopBuildingMessages();
+
+    // Show first message immediately
+    this.showBuildingMessage();
+
+    // Then show messages every 8 seconds
+    this.buildingMessageInterval = setInterval(() => {
+      this.showBuildingMessage();
+    }, 8000);
+  }
+
+  stopBuildingMessages() {
+    if (this.buildingMessageInterval) {
+      clearInterval(this.buildingMessageInterval);
+      this.buildingMessageInterval = null;
+    }
+  }
+
+  async showBuildingMessage() {
+    this.buildingMessageCount++;
+    console.log(`Toolie: Building message #${this.buildingMessageCount}, useAISummaries: ${this.useAISummaries}`);
+
+    // Every 2nd message, try to show an AI summary
+    if (this.buildingMessageCount % 2 === 0 && this.useAISummaries) {
+      console.log('🤖 Toolie: Attempting AI summary (message #' + this.buildingMessageCount + ')...');
+      const success = await this.showAISummary();
+      if (success) {
+        console.log('✅ Toolie: AI summary succeeded!');
+        return; // AI summary was shown
+      }
+      console.log('❌ Toolie: AI summary failed, using regular message');
+      // If AI summary failed, fall through to regular message
+    }
+
+    // Show regular building message
+    console.log('Toolie: Showing regular building message');
+    this.showMessage('building');
+  }
+
+  async showAISummary() {
+    console.log('🔍 Toolie: showAISummary() called');
+    try {
+      // Extract content from Assist sidebar
+      console.log('📝 Toolie: Extracting content from sidebar...');
+      const content = this.extractAssistContent();
+
+      if (!content) {
+        console.log('⚠️ Toolie: No content extracted from sidebar');
+        return false;
+      }
+
+      if (content.length < 50) {
+        console.log('⚠️ Toolie: Not enough content to summarize (length:', content.length, ')');
+        return false;
+      }
+
+      console.log('✅ Toolie: Content extracted, length:', content.length);
+      console.log('📄 Toolie: Content preview:', content.substring(0, 100) + '...');
+
+      // Generate summary with timeout
+      console.log('⏱️ Toolie: Generating AI summary with 5s timeout...');
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Summary timeout')), 5000)
+      );
+
+      const summaryPromise = this.generateAISummary(content);
+      const summary = await Promise.race([summaryPromise, timeoutPromise]);
+
+      if (summary) {
+        console.log('✅ Toolie: AI generated summary:', summary);
+        // Display the summary with AI-generated personality
+        this.showMessageDirect(summary);
+        return true;
+      }
+
+      console.log('⚠️ Toolie: No summary generated');
+      return false;
+    } catch (error) {
+      console.log('❌ Toolie: AI summary failed:', error.message, error);
+      return false;
+    }
+  }
+
+  async generateAISummary(text) {
+    console.log('🎯 Toolie: generateAISummary() called');
+    console.log('🎯 Toolie: hasPromptAPI:', this.hasPromptAPI);
+    console.log('🎯 Toolie: aiSession exists:', !!this.aiSession);
+    console.log('🎯 Toolie: isCreatingSession:', this.isCreatingSession);
+
+    if (!this.hasPromptAPI) {
+      console.log('⚠️ Toolie: Prompt API not available');
+      return null;
+    }
+
+    // If session doesn't exist and isn't being created, we can't generate
+    if (!this.aiSession) {
+      if (this.isCreatingSession) {
+        console.log('⏳ Toolie: Session is being created, skipping this summary');
+      } else {
+        console.log('⚠️ Toolie: Session not initialized (will be created on first user input)');
+      }
+      return null;
+    }
+
+    try {
+      console.log('🟢 Toolie: Sending prompt to AI...');
+      console.log('📝 Toolie: Input text preview:', text.substring(0, 200));
+
+      // Use the session with Toolie's personality to generate a summary
+      const prompt = `Summarize what's being built here in 1-2 sentences with your sarcastic-but-helpful tone:\n\n${text}`;
+
+      const summary = await this.aiSession.prompt(prompt);
+
+      console.log('✅ Toolie: AI returned:', summary);
+
+      return summary.trim();
+    } catch (error) {
+      console.log('❌ Toolie: Prompt API failed:', error.message, error);
+      return null;
+    }
+  }
+
+
+  showMessageDirect(messageText, duration = 4000) {
+    // Show a message directly without using the quips system
+    console.log('💬 Toolie: showMessageDirect() called with:', messageText);
+    const textElement = document.getElementById('toolie-speech-text');
+    console.log('💬 Toolie: textElement:', textElement);
+    console.log('💬 Toolie: speechBubble:', this.speechBubble);
+
+    if (textElement && this.speechBubble) {
+      textElement.textContent = messageText;
+      this.speechBubble.classList.add('visible');
+      console.log('💬 Toolie: Speech bubble should now be visible with message:', messageText);
+
+      // Clear existing timeout
+      if (this.messageTimeout) {
+        clearTimeout(this.messageTimeout);
+      }
+
+      // Hide after duration
+      this.messageTimeout = setTimeout(() => {
+        this.hideSpeechBubble();
+      }, duration);
+    } else {
+      console.log('❌ Toolie: Cannot show message - textElement or speechBubble is null');
+    }
+  }
+
+  extractAssistContent() {
+    try {
+      const sidebar = document.querySelector('[data-testid="Editor::SidebarContent"]');
+      if (!sidebar) {
+        console.log('Toolie: Could not find Assist sidebar');
+        return null;
+      }
+
+      console.log('📋 Toolie: Found sidebar, extracting content...');
+
+      // Look for step completion messages - these contain the actual work descriptions
+      const completionMessages = [];
+
+      // Find all paragraph elements that contain step completion descriptions
+      const paragraphs = sidebar.querySelectorAll('._main_1b2th_1 p');
+      console.log('📋 Toolie: Found', paragraphs.length, 'completion message paragraphs');
+
+      paragraphs.forEach(p => {
+        const text = p.textContent.trim();
+        // Skip empty or very short messages
+        if (text.length > 20) {
+          completionMessages.push(text);
+        }
+      });
+
+      // Get the last 3-5 completion messages for context
+      const recentMessages = completionMessages.slice(-5);
+      console.log('📋 Toolie: Using last', recentMessages.length, 'completion messages');
+
+      if (recentMessages.length === 0) {
+        console.log('📋 Toolie: No completion messages found');
+        return null;
+      }
+
+      // Join the messages together
+      const conversationText = recentMessages.join(' ');
+      console.log('📋 Toolie: Extracted completion messages length:', conversationText.length);
+      console.log('📋 Toolie: Completion messages preview:', conversationText.substring(0, 300));
+
+      // Limit to ~300 words for summarization
+      const words = conversationText.trim().split(/\s+/).slice(-300);
+      const limitedText = words.join(' ');
+
+      console.log('📋 Toolie: Final extracted text length:', limitedText.length, 'characters');
+      console.log('📋 Toolie: Final text preview:', limitedText.substring(0, 200));
+
+      // Only return if we have substantial content
+      if (limitedText.length < 50) {
+        console.log('📋 Toolie: Content too short after extraction');
+        return null;
+      }
+
+      return limitedText;
+    } catch (error) {
+      console.log('Toolie: Error extracting content:', error);
+      return null;
+    }
   }
 
   observeBuilding() {
