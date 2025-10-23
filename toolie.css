@@ -22,61 +22,10 @@
   height: 100%;
 }
 
-/* Eye animations */
-/*#toolie-character .eyeball-left,
+/* Eye animations - smooth transitions handled via JavaScript */
+#toolie-character .eyeball-left,
 #toolie-character .eyeball-right {
-  transform-origin: center;
-  animation: lookAround 4s ease-in-out infinite;
-}*/
-
-#toolie-character .eyeball-right {
-  animation-delay: 0.1s;
-}
-
-@keyframes lookAround {
-  0%, 100% {
-    transform: scale(1);
-  }
-  25% {
-    transform: scale(1.05);
-  }
-  50% {
-    transform: scale(0.98);
-  }
-  75% {
-    transform: scale(1.02);
-  }
-}
-
-/*#toolie-character.thinking .eyeball-left,
-#toolie-character.thinking .eyeball-right {
-  animation: thinking 1.5s ease-in-out infinite;
-}*/
-
-@keyframes thinking {
-  0%, 100% {
-    transform: scale(1) rotate(0deg);
-  }
-  25% {
-    transform: scale(0.95) rotate(-3deg);
-  }
-  75% {
-    transform: scale(1.05) rotate(3deg);
-  }
-}
-
-/*#toolie-character.excited .eyeball-left,
-#toolie-character.excited .eyeball-right {
-  animation: excited 0.6s ease-in-out infinite;
-}*/
-
-@keyframes excited {
-  0%, 100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.2);
-  }
+  transition: all 0.5s ease-in-out;
 }
 
 /* Speech Bubble */
